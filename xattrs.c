@@ -968,7 +968,7 @@ int get_stat_xattr(const char *fname, int fd, STRUCT_STAT *fst, STRUCT_STAT *xst
 int set_stat_xattr(const char *fname, struct file_struct *file, mode_t new_mode)
 {
 	STRUCT_STAT fst, xst;
-	dev_t rdev;
+	DEV_T rdev;
 	mode_t mode, fmode;
 
 	if (dry_run)

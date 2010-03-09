@@ -7,12 +7,10 @@ Makefile.old
 configure.sh
 configure.sh.old
 config.cache
-config.h
 config.h.in
 config.h.in.old
 config.log
 config.status
-/proto.h
 /proto.h-tstamp
 /rsync.1
 /rsyncd.conf.5
@@ -32,7 +30,6 @@ config.status
 /t_unsafe
 /wildtest
 /getfsdev
-/rounding.h
 /doc/rsync.pdf
 /doc/rsync.ps
 /support/savetransfer

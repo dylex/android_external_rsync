@@ -9,6 +9,8 @@
 #ifndef H_POPTINT
 #define H_POPTINT
 
+#include <stdlib.h>
+
 /**
  * Wrapper to free(3), hides const compilation noise, permit NULL, return NULL.
  * @param p		memory to free

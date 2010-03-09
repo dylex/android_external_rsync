@@ -89,7 +89,7 @@ extern iconv_t ic_send, ic_recv;
 
 int io_error;
 int checksum_len;
-dev_t filesystem_dev; /* used to implement -x */
+DEV_T filesystem_dev; /* used to implement -x */
 
 struct file_list *cur_flist, *first_flist, *dir_flist;
 int send_dir_ndx = -1, send_dir_depth = -1;
@@ -116,7 +116,7 @@ int flist_eof = 0; /* all the file-lists are now known */
 /* The tmp_* vars are used as a cache area by make_file() to store data
  * that the sender doesn't need to remember in its file list.  The data
  * will survive just long enough to be used by send_file_entry(). */
-static dev_t tmp_rdev;
+static DEV_T tmp_rdev;
 #ifdef SUPPORT_HARD_LINKS
 static int64 tmp_dev, tmp_ino;
 #endif
@@ -399,7 +399,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
 #ifdef SUPPORT_HARD_LINKS
 	static int64 dev;
 #endif
-	static dev_t rdev;
+	static DEV_T rdev;
 	static uint32 rdev_major;
 	static uid_t uid;
 	static gid_t gid;
@@ -638,7 +638,7 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
 #ifdef SUPPORT_HARD_LINKS
 	static int64 dev;
 #endif
-	static dev_t rdev;
+	static DEV_T rdev;
 	static uint32 rdev_major;
 	static uid_t uid;
 	static gid_t gid;
@@ -798,7 +798,7 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
 	 || (preserve_specials && IS_SPECIAL(mode))) {
 		if (protocol_version < 28) {
 			if (!(xflags & XMIT_SAME_RDEV_pre28))
-				rdev = (dev_t)read_int(f);
+				rdev = (DEV_T)read_int(f);
 		} else {
 			uint32 rdev_minor;
 			if (!(xflags & XMIT_SAME_RDEV_MAJOR))

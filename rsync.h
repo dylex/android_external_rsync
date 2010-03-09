@@ -500,11 +500,18 @@ typedef unsigned int size_t;
 #endif
 #endif
 
-#if SIZEOF_OFF_T == 8 || !SIZEOF_OFF64_T || !defined HAVE_STRUCT_STAT64
+#ifdef __BIONIC__
+#define DEV_T unsigned long long
+#define OFF_T off_t
+#define STRUCT_STAT struct stat
+#define SIZEOF_CAPITAL_OFF_T SIZEOF_OFF_T
+#elif SIZEOF_OFF_T == 8 || !SIZEOF_OFF64_T || !defined HAVE_STRUCT_STAT64
+#define DEV_T dev_t
 #define OFF_T off_t
 #define STRUCT_STAT struct stat
 #define SIZEOF_CAPITAL_OFF_T SIZEOF_OFF_T
 #else
+#define DEV_T dev_t
 #define OFF_T off64_t
 #define STRUCT_STAT struct stat64
 #define USE_STAT64_FUNCS 1

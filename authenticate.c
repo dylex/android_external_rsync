@@ -285,6 +285,36 @@ char *auth_server(int f_in, int f_out, int module, const char *host,
 	return strdup(line);
 }
 
+#ifdef __BIONIC__
+#include <termios.h>
+static const char *getpass(char *prompt)
+{
+	struct termios old, new;
+	static char res[256];
+	char *p;
+
+	/* Turn echoing off and fail if we can't. */
+	if (tcgetattr (0, &old) != 0)
+		return NULL;
+	new = old;
+	new.c_lflag &= ~ECHO;
+	if (tcsetattr (0, TCSAFLUSH, &new) != 0)
+		return NULL;
+
+	fprintf(stderr, "%s", prompt);
+	fflush(stderr);
+	fgets(res, 256, stdin);
+	if ((p = strchr(res, '\n')))
+		*p = 0;
+
+	/* Restore terminal. */
+	tcsetattr (0, TCSAFLUSH, &old);
+
+	return res;
+}
+
+#endif
+
 void auth_client(int fd, const char *user, const char *challenge)
 {
 	const char *pass;
