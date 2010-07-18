@@ -70,7 +70,7 @@ extern struct stats stats;
 extern char *filesfrom_host;
 extern char *partial_dir;
 extern char *dest_option;
-extern char *basis_dir[];
+extern char *basis_dir[MAX_BASIS_DIRS+1];
 extern char *rsync_path;
 extern char *shell_cmd;
 extern char *batch_name;
@@ -507,6 +507,10 @@ static char *get_local_name(struct file_list *flist, char *dest_path)
 
 	if (!dest_path || list_only)
 		return NULL;
+
+	/* Treat an empty string as a copy into the current directory. */
+	if (!*dest_path)
+	    dest_path = ".";
 
 	if (daemon_filter_list.head) {
 		char *slash = strrchr(dest_path, '/');

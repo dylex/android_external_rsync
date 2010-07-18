@@ -688,6 +688,12 @@ specify a backup suffix using the bf(--suffix) option
 (otherwise the files backed up in the specified directory
 will keep their original filenames).
 
+Note that if you specify a relative path, the backup directory will be
+relative to the destination directory, so you probably want to specify
+either an absolute path or a path that starts with "../".  If an rsync
+daemon is the receiver, the backup dir cannot go outside the module's path
+hierarchy, so take extra care not to delete it or copy into it.
+
 dit(bf(--suffix=SUFFIX)) This option allows you to override the default
 backup suffix used with the bf(--backup) (bf(-b)) option. The default suffix is a ~
 if no -bf(-backup-dir) was specified, otherwise it is an empty string.
@@ -713,17 +719,26 @@ its data needs to be updated: instead of the default method of creating
 a new copy of the file and moving it into place when it is complete, rsync
 instead writes the updated data directly to the destination file.
 
-This has several effects: (1) in-use binaries cannot be updated (either the
-OS will prevent this from happening, or binaries that attempt to swap-in
-their data will misbehave or crash), (2) the file's data will be in an
-inconsistent state during the transfer, (3) a file's data may be left in an
-inconsistent state after the transfer if the transfer is interrupted or if
-an update fails, (4) a file that does not have write permissions can not be
-updated, and (5) the efficiency of rsync's delta-transfer algorithm may be
-reduced if some data in the destination file is overwritten before it can
-be copied to a position later in the file (one exception to this is if you
-combine this option with bf(--backup), since rsync is smart enough to use
-the backup file as the basis file for the transfer).
+This has several effects:
+
+quote(itemization(
+  it() Hard links are not broken.  This means the new data will be visible
+  through other hard links to the destination file.  Moreover, attempts to
+  copy differing source files onto a multiply-linked destination file will
+  result in a "tug of war" with the destination data changing back and forth.
+  it() In-use binaries cannot be updated (either the OS will prevent this from
+  happening, or binaries that attempt to swap-in their data will misbehave or
+  crash).
+  it() The file's data will be in an inconsistent state during the transfer
+  and will be left that way if the transfer is interrupted or if an update
+  fails.
+  it() A file that does not have write permissions cannot be updated.
+  it() The efficiency of rsync's delta-transfer algorithm may be reduced if
+  some data in the destination file is overwritten before it can be copied to
+  a position later in the file.  This does not apply if you use bf(--backup),
+  since rsync is smart enough to use the backup file as the basis file for the
+  transfer.
+))
 
 WARNING: you should not use this option to update files that are being
 accessed by others, so be careful when choosing to use this for a copy.
@@ -814,6 +829,17 @@ bf(--force) or bf(--delete) is in effect).
 See also bf(--keep-dirlinks) for an analogous option for the receiving
 side.
 
+bf(--copy-dirlinks) applies to all symlinks to directories in the source.  If
+you want to follow only a few specified symlinks, a trick you can use is to
+pass them as additional source args with a trailing slash, using bf(--relative)
+to make the paths match up right.  For example:
+
+quote(tt(rsync -r --relative src/./ src/./follow-me/ dest/))
+
+This works because rsync calls bf(lstat)(2) on the source arg as given, and the
+trailing slash makes bf(lstat)(2) follow the symlink, giving rise to a directory
+in the file-list which overrides the symlink found during the scan of "src/./".
+
 dit(bf(-K, --keep-dirlinks)) This option causes the receiving side to treat
 a symlink to a directory as though it were a real directory, but only if it
 matches a real directory from the sender.  Without this option, the
@@ -837,17 +863,23 @@ to modify your receiving hierarchy.
 See also bf(--copy-dirlinks) for an analogous option for the sending side.
 
 dit(bf(-H, --hard-links)) This tells rsync to look for hard-linked files in
-the transfer and link together the corresponding files on the receiving
-side.  Without this option, hard-linked files in the transfer are treated
+the source and link together the corresponding files on the destination.
+Without this option, hard-linked files in the source are treated
 as though they were separate files.
 
-When you are updating a non-empty destination, this option only ensures
-that files that are hard-linked together on the source are hard-linked
-together on the destination.  It does NOT currently endeavor to break
-already existing hard links on the destination that do not exist between
-the source files.  Note, however, that if one or more extra-linked files
-have content changes, they will become unlinked when updated (assuming you
-are not using the bf(--inplace) option).
+This option does NOT necessarily ensure that the pattern of hard links on the
+destination exactly matches that on the source.  Cases in which the
+destination may end up with extra hard links include the following:
+
+quote(itemization(
+  it() If the destination already contains hard links, rsync will not break
+  them explicitly.  However, if one or more of the paths have content
+  differences, the normal file-update process will break those links, unless
+  you are using the bf(--inplace) option.
+  it() If you specify a bf(--link-dest) directory that contains hard links,
+  rsync may use the same bf(--link-dest) file multiple times via several of
+  its paths.
+))
 
 Note that rsync can only detect hard links between files that are inside
 the transfer set.  If rsync updates a file that has extra hard-link
@@ -938,13 +970,17 @@ The source and destination systems must have compatible ACL entries for this
 option to work properly.  See the bf(--fake-super) option for a way to backup
 and restore ACLs that are not compatible.
 
-dit(bf(-X, --xattrs)) This option causes rsync to update the remote
-extended attributes to be the same as the local ones.
+dit(bf(-X, --xattrs)) This option causes rsync to update the destination
+extended attributes to be the same as the source ones.
 
 For systems that support extended-attribute namespaces, a copy being done by a
 super-user copies all namespaces except system.*.  A normal user only copies
 the user.* namespace.  To be able to backup and restore non-user namespaces as
 a normal user, see the bf(--fake-super) option.
+
+Note that this option does not copy rsyncs special xattr values (e.g. those
+used by bf(--fake-super)) unless you repeat the option (e.g. -XX).  This
+"copy all xattrs" mode cannot be used with bf(--fake-super).
 
 dit(bf(--chmod)) This option tells rsync to apply one or more
 comma-separated "chmod" strings to the permission of the files in the

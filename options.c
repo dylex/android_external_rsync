@@ -3,7 +3,7 @@
  *
  * Copyright (C) 1998-2001 Andrew Tridgell <tridge@samba.org>
  * Copyright (C) 2000, 2001, 2002 Martin Pool <mbp@samba.org>
- * Copyright (C) 2002-2009 Wayne Davison
+ * Copyright (C) 2002-2010 Wayne Davison
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -85,7 +85,6 @@ int numeric_ids = 0;
 int allow_8bit_chars = 0;
 int force_delete = 0;
 int io_timeout = 0;
-int allowed_lull = 0;
 int prune_empty_dirs = 0;
 int use_qsort = 0;
 char *files_from = NULL;
@@ -260,7 +259,7 @@ static void print_rsync_version(enum logcode f)
 
 	rprintf(f, "%s  version %s  protocol version %d%s\n",
 		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-	rprintf(f, "Copyright (C) 1996-2009 by Andrew Tridgell, Wayne Davison, and others.\n");
+	rprintf(f, "Copyright (C) 1996-2010 by Andrew Tridgell, Wayne Davison, and others.\n");
 	rprintf(f, "Web site: http://rsync.samba.org/\n");
 	rprintf(f, "Android port by Dylan Simon: http://github.com/dylex/android_external_rsync\n");
 	rprintf(f, "Capabilities:\n");
