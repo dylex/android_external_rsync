@@ -294,7 +294,6 @@ int open_socket_out_wrapped(char *host, int port, const char *bind_addr,
 int is_a_socket(int fd);
 void start_accept_loop(int port, int (*fn)(int, int));
 void set_socket_options(int fd, char *options);
-int sock_exec(const char *prog);
 int do_unlink(const char *fname);
 int do_symlink(const char *fname1, const char *fname2);
 int do_link(const char *fname1, const char *fname2);
