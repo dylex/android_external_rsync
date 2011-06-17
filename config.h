@@ -1,5 +1,5 @@
 /* config.h.  Generated from config.h.in by configure.  */
-/* config.h.in.  Generated from configure.in by autoheader.  */
+/* config.h.in.  Generated from configure.ac by autoheader.  */
 
 /* Define if building universal (internal helper macro) */
 /* #undef AC_APPLE_UNIVERSAL_BUILD */
@@ -402,7 +402,7 @@
 /* Define to 1 if the system has the type `struct stat64'. */
 #define HAVE_STRUCT_STAT64 1
 
-/* Define to 1 if `st_rdev' is member of `struct stat'. */
+/* Define to 1 if `st_rdev' is a member of `struct stat'. */
 #define HAVE_STRUCT_STAT_ST_RDEV 1
 
 /* Define to 1 if you have the "struct utimbuf" type */
@@ -482,6 +482,9 @@
 /* Define to 1 if you have the `utime' function. */
 #define HAVE_UTIME 1
 
+/* Define to 1 if you have the `utimensat' function. */
+/* #undef HAVE_UTIMENSAT */
+
 /* Define to 1 if you have the `utimes' function. */
 #define HAVE_UTIMES 1
 
@@ -554,6 +557,15 @@
 /* unprivileged user--e.g. nobody */
 #define NOBODY_USER "nobody"
 
+/* True if device files do not support xattrs */
+/* #undef NO_DEVICE_XATTRS */
+
+/* True if special files do not support xattrs */
+/* #undef NO_SPECIAL_XATTRS */
+
+/* True if symlinks do not support xattrs */
+/* #undef NO_SYMLINK_XATTRS */
+
 /* Define to the address where bug reports for this package should be sent. */
 #define PACKAGE_BUGREPORT ""
 
@@ -565,6 +577,9 @@
 
 /* Define to the one symbol short name of this package. */
 #define PACKAGE_TARNAME ""
+
+/* Define to the home page for this package. */
+#define PACKAGE_URL ""
 
 /* Define to the version of this package. */
 #define PACKAGE_VERSION ""
@@ -582,7 +597,7 @@
 #define RSYNC_RSH "ssh"
 
 /* rsync release version */
-#define RSYNC_VERSION "3.0.7"
+#define RSYNC_VERSION "3.0.8"
 
 /* Define to 1 if sockets need to be shutdown */
 /* #undef SHUTDOWN_ALL_SOCKETS */

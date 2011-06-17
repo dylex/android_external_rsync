@@ -3,11 +3,11 @@
 int allow_access(char *addr, char *host, char *allow_list, char *deny_list);
 void free_acl(stat_x *sxp);
 int get_acl(const char *fname, stat_x *sxp);
-void send_acl(stat_x *sxp, int f);
-void receive_acl(struct file_struct *file, int f);
+void send_acl(int f, stat_x *sxp);
+void receive_acl(int f, struct file_struct *file);
 void cache_tmp_acl(struct file_struct *file, stat_x *sxp);
 void uncache_tmp_acls(void);
-int set_acl(const char *fname, const struct file_struct *file, stat_x *sxp);
+int set_acl(const char *fname, const struct file_struct *file, stat_x *sxp, mode_t new_mode);
 void match_acl_ids(void);
 int default_perms_for_dir(const char *dir);
 void base64_encode(const char *buf, int len, char *out, int pad);
@@ -73,7 +73,7 @@ char *get_rule_prefix(int match_flags, const char *pat, int for_xfer,
 		      unsigned int *plen_ptr);
 void send_filter_list(int f_out);
 void recv_filter_list(int f_in);
-int sparse_end(int f);
+int sparse_end(int f, OFF_T size);
 int flush_write_file(int f);
 int write_file(int f, char *buf, int len);
 struct map_struct *map_file(int fd, OFF_T len, int32 read_size,
@@ -100,7 +100,7 @@ int f_name_cmp(const struct file_struct *f1, const struct file_struct *f2);
 int f_name_has_prefix(const struct file_struct *f1, const struct file_struct *f2);
 char *f_name_buf(void);
 char *f_name(const struct file_struct *f, char *fbuf);
-struct file_list *get_dirlist(char *dirname, int dlen, int ignore_filter_rules);
+struct file_list *get_dirlist(char *dirname, int dlen, int flags);
 int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp);
 void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statret,
 	     stat_x *sxp, int32 iflags, uchar fnamecmp_type,
@@ -303,6 +303,7 @@ int do_rmdir(const char *pathname);
 int do_open(const char *pathname, int flags, mode_t mode);
 int do_chmod(const char *path, mode_t mode);
 int do_rename(const char *fname1, const char *fname2);
+int do_ftruncate(int fd, OFF_T size);
 void trim_trailing_slashes(char *name);
 int do_mkdir(char *fname, mode_t mode);
 int do_mkstemp(char *template, mode_t perms);
@@ -310,6 +311,10 @@ int do_stat(const char *fname, STRUCT_STAT *st);
 int do_lstat(const char *fname, STRUCT_STAT *st);
 int do_fstat(int fd, STRUCT_STAT *st);
 OFF_T do_lseek(int fd, OFF_T offset, int whence);
+int do_utimensat(const char *fname, time_t modtime, uint32 mod_nsec);
+int do_lutimes(const char *fname, time_t modtime, uint32 mod_nsec);
+int do_utimes(const char *fname, time_t modtime, uint32 mod_nsec);
+int do_utime(const char *fname, time_t modtime, UNUSED(uint32 mod_nsec));
 void set_compression(const char *fname);
 void send_token(int f, int32 token, struct map_struct *buf, OFF_T offset,
 		int32 n, int32 toklen);
@@ -380,11 +385,11 @@ void *expand_item_list(item_list *lp, size_t item_size,
 void free_xattr(stat_x *sxp);
 int get_xattr(const char *fname, stat_x *sxp);
 int copy_xattrs(const char *source, const char *dest);
-int send_xattr(stat_x *sxp, int f);
+int send_xattr(int f, stat_x *sxp);
 int xattr_diff(struct file_struct *file, stat_x *sxp, int find_all);
 void send_xattr_request(const char *fname, struct file_struct *file, int f_out);
 int recv_xattr_request(struct file_struct *file, int f_in);
-void receive_xattr(struct file_struct *file, int f);
+void receive_xattr(int f, struct file_struct *file);
 void cache_tmp_xattr(struct file_struct *file, stat_x *sxp);
 void uncache_tmp_xattrs(void);
 int set_xattr(const char *fname, const struct file_struct *file,
