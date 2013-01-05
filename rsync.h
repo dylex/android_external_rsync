@@ -65,6 +65,7 @@
 /* These flags are used in the live flist data. */
 
 #define FLAG_TOP_DIR (1<<0)	/* sender/receiver/generator */
+#define FLAG_OWNED_BY_US (1<<0) /* generator: set by make_file() for aux flists only */
 #define FLAG_FILE_SENT (1<<1)	/* sender/receiver/generator */
 #define FLAG_DIR_CREATED (1<<1)	/* generator */
 #define FLAG_CONTENT_DIR (1<<2)	/* sender/receiver/generator */
@@ -83,8 +84,12 @@
 
 /* These flags are passed to functions but not stored. */
 
-#define FLAG_DIVERT_DIRS (1<<16)/* sender */
+#define FLAG_DIVERT_DIRS (1<<16)   /* sender, but must be unique */
 
+/* These flags are for get_dirlist(). */
+#define GDL_IGNORE_FILTER_RULES (1<<0)
+
+/* Some helper macros for matching bits. */
 #define BITS_SET(val,bits) (((val) & (bits)) == (bits))
 #define BITS_SETnUNSET(val,onbits,offbits) (((val) & ((onbits)|(offbits))) == (onbits))
 #define BITS_EQUAL(b1,b2,mask) (((unsigned)(b1) & (unsigned)(mask)) \
@@ -95,7 +100,7 @@
 
 /* This is used when working on a new protocol version in CVS, and should
  * be a new non-zero value for each CVS change that affects the protocol.
- * It must ALWAYS be 0 when the protocol goes final! */
+ * It must ALWAYS be 0 when the protocol goes final (and NEVER before)! */
 #define SUBPROTOCOL_VERSION 0
 
 /* We refuse to interoperate with versions that are not in this range.
@@ -333,6 +338,18 @@ enum msgcode {
 
 #ifdef HAVE_UTIME_H
 #include <utime.h>
+#endif
+
+#if defined HAVE_LUTIMES || defined HAVE_UTIMENSAT
+#define CAN_SET_SYMLINK_TIMES 1
+#endif
+
+#if defined HAVE_LCHOWN || defined CHOWN_MODIFIES_SYMLINK
+#define CAN_CHOWN_SYMLINK 1
+#endif
+
+#if defined HAVE_LCHMOD || defined HAVE_SETATTRLIST
+#define CAN_CHMOD_SYMLINK 1
 #endif
 
 #ifdef HAVE_SYS_SELECT_H
@@ -1075,6 +1092,10 @@ extern int errno;
 
 #define IS_SPECIAL(mode) (S_ISSOCK(mode) || S_ISFIFO(mode))
 #define IS_DEVICE(mode) (S_ISCHR(mode) || S_ISBLK(mode))
+
+#define PRESERVE_FILE_TIMES	(1<<0)
+#define PRESERVE_DIR_TIMES	(1<<1)
+#define PRESERVE_LINK_TIMES	(1<<2)
 
 /* Initial mask on permissions given to temporary files.  Mask off setuid
      bits and group access because of potential race-condition security

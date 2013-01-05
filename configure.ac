@@ -5,7 +5,7 @@ AC_CONFIG_SRCDIR([byteorder.h])
 AC_CONFIG_HEADER(config.h)
 AC_PREREQ(2.59)
 
-RSYNC_VERSION=3.0.8dev
+RSYNC_VERSION=3.0.9
 AC_SUBST(RSYNC_VERSION)
 AC_MSG_NOTICE([Configuring rsync $RSYNC_VERSION])
 
@@ -46,7 +46,7 @@ AC_DEFINE([_GNU_SOURCE], 1,
           [Define _GNU_SOURCE so that we get all necessary prototypes])
 
 if test x"$ac_cv_prog_cc_stdc" = x"no"; then
-	AC_MSG_WARN([rsync requires an ANSI C compiler and you don't seem to have one])
+	AC_MSG_WARN([rsync requires an ANSI C compiler and you do not seem to have one])
 fi
 
 AC_ARG_ENABLE(profile,
@@ -193,7 +193,7 @@ ipv6trylibc=yes
 
 AC_ARG_ENABLE(ipv6,
 	AC_HELP_STRING([--disable-ipv6],
-		[don't even try to use IPv6]))
+		[do not even try to use IPv6]))
 if test x"$enable_ipv6" != x"no"; then
 	AC_MSG_CHECKING([ipv6 stack type])
 	for i in inria kame linux-glibc linux-inet6 solaris toshiba v6d zeta cygwin; do
@@ -307,7 +307,7 @@ AC_ARG_ENABLE([locale],
 	AC_HELP_STRING([--disable-locale],
 		[disable locale features]))
 AH_TEMPLATE([CONFIG_LOCALE],
-[Undefine if you don't want locale features.  By default this is defined.])
+[Undefine if you do not want locale features.  By default this is defined.])
 if test x"$enable_locale" != x"no"; then
 	AC_DEFINE(CONFIG_LOCALE)
 fi
@@ -331,7 +331,7 @@ AC_CHECK_HEADERS(sys/fcntl.h sys/select.h fcntl.h sys/time.h sys/unistd.h \
     sys/un.h sys/attr.h mcheck.h arpa/inet.h arpa/nameser.h locale.h \
     netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
     sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
-    popt.h popt/popt.h)
+    popt.h popt/popt.h netinet/in_systm.h netinet/ip.h)
 AC_HEADER_MAJOR
 
 AC_CACHE_CHECK([if makedev takes 3 args],rsync_cv_MAKEDEV_TAKES_3_ARGS,[
@@ -428,8 +428,10 @@ fi
 
 AC_SEARCH_LIBS(inet_ntop, resolv)
 
-# Solaris and HP-UX weirdness:
-# Search for libiconv_open (not iconv_open) to discover if -liconv is needed!
+# For OS X, Solaris, HP-UX, etc.: figure out if -liconv is needed.  We'll
+# accept either iconv_open or libiconv_open, since some include files map
+# the former to the latter.
+AC_SEARCH_LIBS(iconv_open, iconv)
 AC_SEARCH_LIBS(libiconv_open, iconv)
 
 AC_MSG_CHECKING([for iconv declaration])
@@ -571,7 +573,8 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strdup chown chmod lchmod mknod mkfifo \
     strlcat strlcpy strtol mallinfo getgroups setgroups geteuid getegid \
     setlocale setmode open64 lseek64 mkstemp64 mtrace va_copy __va_copy \
     seteuid strerror putenv iconv_open locale_charset nl_langinfo getxattr \
-    extattr_get_link sigaction sigprocmask setattrlist)
+    extattr_get_link sigaction sigprocmask setattrlist \
+    utimensat)
 
 dnl cygwin iconv.h defines iconv_open as libiconv_open
 if test x"$ac_cv_func_iconv_open" != x"yes"; then
@@ -672,7 +675,11 @@ AC_TRY_RUN([
 
 main() {
        int fd[2];
+#ifdef __CYGWIN__
+       exit(1);
+#else
        exit((socketpair(AF_UNIX, SOCK_STREAM, 0, fd) != -1) ? 0 : 1);
+#endif
 }],
 rsync_cv_HAVE_SOCKETPAIR=yes,rsync_cv_HAVE_SOCKETPAIR=no,rsync_cv_HAVE_SOCKETPAIR=cross)])
 if test x"$rsync_cv_HAVE_SOCKETPAIR" = x"yes"; then
@@ -968,11 +975,17 @@ else
 	AC_MSG_RESULT(Using OS X xattrs)
 	AC_DEFINE(HAVE_OSX_XATTRS, 1, [True if you have Mac OS X xattrs])
 	AC_DEFINE(SUPPORT_XATTRS, 1)
+	AC_DEFINE(NO_DEVICE_XATTRS, 1, [True if device files do not support xattrs])
+	AC_DEFINE(NO_SPECIAL_XATTRS, 1, [True if special files do not support xattrs])
 	;;
     freebsd*)
 	AC_MSG_RESULT(Using FreeBSD extattrs)
 	AC_DEFINE(HAVE_FREEBSD_XATTRS, 1, [True if you have FreeBSD xattrs])
 	AC_DEFINE(SUPPORT_XATTRS, 1)
+	;;
+    solaris*)
+	# Better Solaris support coming in 3.1.0...
+	AC_DEFINE(NO_SYMLINK_XATTRS, 1, [True if symlinks do not support xattrs])
 	;;
     *)
 	if test x"$enable_xattr_support" = x"yes"; then

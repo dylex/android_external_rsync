@@ -31,6 +31,8 @@ extern int list_only;
 extern int orig_umask;
 extern int numeric_ids;
 extern int inc_recurse;
+extern int preserve_devices;
+extern int preserve_specials;
 
 /* Flags used to indicate what items are being transmitted for an entry. */
 #define XMIT_USER_OBJ (1<<0)
@@ -115,10 +117,11 @@ static int calc_sacl_entries(const rsync_acl *racl)
 	/* A System ACL always gets user/group/other permission entries. */
 	return racl->names.count
 #ifdef ACLS_NEED_MASK
-	     + 4;
+	     + 1
 #else
-	     + (racl->mask_obj != NO_ENTRY) + 3;
+	     + (racl->mask_obj != NO_ENTRY)
 #endif
+	     + 3;
 }
 
 /* Extracts and returns the permission bits from the ACL.  This cannot be
@@ -132,16 +135,21 @@ static int rsync_acl_get_perms(const rsync_acl *racl)
 
 /* Removes the permission-bit entries from the ACL because these
  * can be reconstructed from the file's mode. */
-static void rsync_acl_strip_perms(rsync_acl *racl)
+static void rsync_acl_strip_perms(stat_x *sxp)
 {
+	rsync_acl *racl = sxp->acc_acl;
+
 	racl->user_obj = NO_ENTRY;
 	if (racl->mask_obj == NO_ENTRY)
 		racl->group_obj = NO_ENTRY;
 	else {
-		if (racl->group_obj == racl->mask_obj)
+		int group_perms = (sxp->st.st_mode >> 3) & 7;
+		if (racl->group_obj == group_perms)
 			racl->group_obj = NO_ENTRY;
-		if (racl->names.count != 0)
+#ifndef HAVE_SOLARIS_ACLS
+		if (racl->names.count != 0 && racl->mask_obj == group_perms)
 			racl->mask_obj = NO_ENTRY;
+#endif
 	}
 	racl->other_obj = NO_ENTRY;
 }
@@ -340,15 +348,6 @@ static BOOL unpack_smb_acl(SMB_ACL_T sacl, rsync_acl *racl)
 	/* Truncate the temporary list now that its idas have been saved. */
 	temp_ida_list.count = 0;
 
-#ifdef ACLS_NEED_MASK
-	if (!racl->names.count && racl->mask_obj != NO_ENTRY) {
-		/* Throw away a superfluous mask, but mask off the
-		 * group perms with it first. */
-		racl->group_obj &= racl->mask_obj;
-		racl->mask_obj = NO_ENTRY;
-	}
-#endif
-
 	return True;
 }
 
@@ -496,9 +495,15 @@ static int get_rsync_acl(const char *fname, rsync_acl *racl,
 		}
 
 		racl->user_obj = IVAL(buf, 0);
+		if (racl->user_obj == NO_ENTRY)
+			racl->user_obj = (mode >> 6) & 7;
 		racl->group_obj = IVAL(buf, 4);
+		if (racl->group_obj == NO_ENTRY)
+			racl->group_obj = (mode >> 3) & 7;
 		racl->mask_obj = IVAL(buf, 8);
 		racl->other_obj = IVAL(buf, 12);
+		if (racl->other_obj == NO_ENTRY)
+			racl->other_obj = mode & 7;
 
 		if (cnt) {
 			char *bp = buf + 4*4;
@@ -540,6 +545,23 @@ static int get_rsync_acl(const char *fname, rsync_acl *racl,
 int get_acl(const char *fname, stat_x *sxp)
 {
 	sxp->acc_acl = create_racl();
+
+	if (S_ISREG(sxp->st.st_mode) || S_ISDIR(sxp->st.st_mode)) {
+		/* Everyone supports this. */
+	} else if (S_ISLNK(sxp->st.st_mode)) {
+		return 0;
+	} else if (IS_SPECIAL(sxp->st.st_mode)) {
+#ifndef NO_SPECIAL_ACLS
+		if (!preserve_specials)
+#endif
+			return 0;
+	} else if (IS_DEVICE(sxp->st.st_mode)) {
+#ifndef NO_DEVICE_ACLS
+		if (!preserve_devices)
+#endif
+			return 0;
+	}
+
 	if (get_rsync_acl(fname, sxp->acc_acl, SMB_ACL_TYPE_ACCESS,
 			  sxp->st.st_mode) < 0) {
 		free_acl(sxp);
@@ -561,7 +583,7 @@ int get_acl(const char *fname, stat_x *sxp)
 /* === Send functions === */
 
 /* Send the ida list over the file descriptor. */
-static void send_ida_entries(const ida_entries *idal, int f)
+static void send_ida_entries(int f, const ida_entries *idal)
 {
 	id_access *ida;
 	size_t count = idal->count;
@@ -573,9 +595,9 @@ static void send_ida_entries(const ida_entries *idal, int f)
 		const char *name;
 		if (ida->access & NAME_IS_USER) {
 			xbits |= XFLAG_NAME_IS_USER;
-			name = add_uid(ida->id);
+			name = numeric_ids ? NULL : add_uid(ida->id);
 		} else
-			name = add_gid(ida->id);
+			name = numeric_ids ? NULL : add_gid(ida->id);
 		write_varint(f, ida->id);
 		if (inc_recurse && name) {
 			int len = strlen(name);
@@ -587,8 +609,8 @@ static void send_ida_entries(const ida_entries *idal, int f)
 	}
 }
 
-static void send_rsync_acl(rsync_acl *racl, SMB_ACL_TYPE_T type,
-			   item_list *racl_list, int f)
+static void send_rsync_acl(int f, rsync_acl *racl, SMB_ACL_TYPE_T type,
+			   item_list *racl_list)
 {
 	int ndx = find_matching_rsync_acl(racl, type, racl_list);
 
@@ -621,7 +643,7 @@ static void send_rsync_acl(rsync_acl *racl, SMB_ACL_TYPE_T type,
 		if (flags & XMIT_OTHER_OBJ)
 			write_varint(f, racl->other_obj);
 		if (flags & XMIT_NAME_LIST)
-			send_ida_entries(&racl->names, f);
+			send_ida_entries(f, &racl->names);
 
 		/* Give the allocated data to the new list object. */
 		*new_racl = *racl;
@@ -631,28 +653,28 @@ static void send_rsync_acl(rsync_acl *racl, SMB_ACL_TYPE_T type,
 
 /* Send the ACL from the stat_x structure down the indicated file descriptor.
  * This also frees the ACL data. */
-void send_acl(stat_x *sxp, int f)
+void send_acl(int f, stat_x *sxp)
 {
 	if (!sxp->acc_acl) {
 		sxp->acc_acl = create_racl();
 		rsync_acl_fake_perms(sxp->acc_acl, sxp->st.st_mode);
 	}
 	/* Avoid sending values that can be inferred from other data. */
-	rsync_acl_strip_perms(sxp->acc_acl);
+	rsync_acl_strip_perms(sxp);
 
-	send_rsync_acl(sxp->acc_acl, SMB_ACL_TYPE_ACCESS, &access_acl_list, f);
+	send_rsync_acl(f, sxp->acc_acl, SMB_ACL_TYPE_ACCESS, &access_acl_list);
 
 	if (S_ISDIR(sxp->st.st_mode)) {
 		if (!sxp->def_acl)
 			sxp->def_acl = create_racl();
 
-		send_rsync_acl(sxp->def_acl, SMB_ACL_TYPE_DEFAULT, &default_acl_list, f);
+		send_rsync_acl(f, sxp->def_acl, SMB_ACL_TYPE_DEFAULT, &default_acl_list);
 	}
 }
 
 /* === Receive functions === */
 
-static uint32 recv_acl_access(uchar *name_follows_ptr, int f)
+static uint32 recv_acl_access(int f, uchar *name_follows_ptr)
 {
 	uint32 access = read_varint(f);
 
@@ -677,7 +699,7 @@ static uint32 recv_acl_access(uchar *name_follows_ptr, int f)
 	return access;
 }
 
-static uchar recv_ida_entries(ida_entries *ent, int f)
+static uchar recv_ida_entries(int f, ida_entries *ent)
 {
 	uchar computed_mask_bits = 0;
 	int i, count = read_varint(f);
@@ -693,7 +715,7 @@ static uchar recv_ida_entries(ida_entries *ent, int f)
 	for (i = 0; i < count; i++) {
 		uchar has_name;
 		id_t id = read_varint(f);
-		uint32 access = recv_acl_access(&has_name, f);
+		uint32 access = recv_acl_access(f, &has_name);
 
 		if (has_name) {
 			if (access & NAME_IS_USER)
@@ -716,7 +738,7 @@ static uchar recv_ida_entries(ida_entries *ent, int f)
 	return computed_mask_bits & ~NO_ENTRY;
 }
 
-static int recv_rsync_acl(item_list *racl_list, SMB_ACL_TYPE_T type, int f)
+static int recv_rsync_acl(int f, item_list *racl_list, SMB_ACL_TYPE_T type, mode_t mode)
 {
 	uchar computed_mask_bits = 0;
 	acl_duo *duo_item;
@@ -731,7 +753,7 @@ static int recv_rsync_acl(item_list *racl_list, SMB_ACL_TYPE_T type, int f)
 
 	if (ndx != 0)
 		return ndx - 1;
-	
+
 	ndx = racl_list->count;
 	duo_item = EXPAND_ITEM_LIST(racl_list, acl_duo, 1000);
 	duo_item->racl = empty_rsync_acl;
@@ -739,22 +761,28 @@ static int recv_rsync_acl(item_list *racl_list, SMB_ACL_TYPE_T type, int f)
 	flags = read_byte(f);
 
 	if (flags & XMIT_USER_OBJ)
-		duo_item->racl.user_obj = recv_acl_access(NULL, f);
+		duo_item->racl.user_obj = recv_acl_access(f, NULL);
 	if (flags & XMIT_GROUP_OBJ)
-		duo_item->racl.group_obj = recv_acl_access(NULL, f);
+		duo_item->racl.group_obj = recv_acl_access(f, NULL);
 	if (flags & XMIT_MASK_OBJ)
-		duo_item->racl.mask_obj = recv_acl_access(NULL, f);
+		duo_item->racl.mask_obj = recv_acl_access(f, NULL);
 	if (flags & XMIT_OTHER_OBJ)
-		duo_item->racl.other_obj = recv_acl_access(NULL, f);
+		duo_item->racl.other_obj = recv_acl_access(f, NULL);
 	if (flags & XMIT_NAME_LIST)
-		computed_mask_bits |= recv_ida_entries(&duo_item->racl.names, f);
+		computed_mask_bits |= recv_ida_entries(f, &duo_item->racl.names);
 
 #ifdef HAVE_OSX_ACLS
 	/* If we received a superfluous mask, throw it away. */
 	duo_item->racl.mask_obj = NO_ENTRY;
 #else
-	if (duo_item->racl.names.count && duo_item->racl.mask_obj == NO_ENTRY) /* Must be non-empty with lists. */
-		duo_item->racl.mask_obj = (computed_mask_bits | duo_item->racl.group_obj) & ~NO_ENTRY;
+	if (duo_item->racl.names.count && duo_item->racl.mask_obj == NO_ENTRY) {
+		/* Mask must be non-empty with lists. */
+		if (type == SMB_ACL_TYPE_ACCESS)
+			computed_mask_bits = (mode >> 3) & 7;
+		else
+			computed_mask_bits |= duo_item->racl.group_obj & ~NO_ENTRY;
+		duo_item->racl.mask_obj = computed_mask_bits;
+	}
 #endif
 
 	duo_item->sacl = NULL;
@@ -763,12 +791,12 @@ static int recv_rsync_acl(item_list *racl_list, SMB_ACL_TYPE_T type, int f)
 }
 
 /* Receive the ACL info the sender has included for this file-list entry. */
-void receive_acl(struct file_struct *file, int f)
+void receive_acl(int f, struct file_struct *file)
 {
-	F_ACL(file) = recv_rsync_acl(&access_acl_list, SMB_ACL_TYPE_ACCESS, f);
+	F_ACL(file) = recv_rsync_acl(f, &access_acl_list, SMB_ACL_TYPE_ACCESS, file->mode);
 
 	if (S_ISDIR(file->mode))
-		F_DIR_DEFACL(file) = recv_rsync_acl(&default_acl_list, SMB_ACL_TYPE_DEFAULT, f);
+		F_DIR_DEFACL(file) = recv_rsync_acl(f, &default_acl_list, SMB_ACL_TYPE_DEFAULT, 0);
 }
 
 static int cache_rsync_acl(rsync_acl *racl, SMB_ACL_TYPE_T type, item_list *racl_list)
@@ -880,12 +908,14 @@ static mode_t change_sacl_perms(SMB_ACL_T sacl, rsync_acl *racl, mode_t old_mode
 			COE2( store_access_in_entry,((mode >> 3) & 7, entry) );
 			break;
 		case SMB_ACL_MASK:
+#ifndef HAVE_SOLARIS_ACLS
 #ifndef ACLS_NEED_MASK
 			/* mask is only empty when we don't need it. */
 			if (racl->mask_obj == NO_ENTRY)
 				break;
 #endif
 			COE2( store_access_in_entry,((mode >> 3) & 7, entry) );
+#endif
 			break;
 		case SMB_ACL_OTHER:
 			COE2( store_access_in_entry,(mode & 7, entry) );
@@ -898,7 +928,7 @@ static mode_t change_sacl_perms(SMB_ACL_T sacl, rsync_acl *racl, mode_t old_mode
 			rsyserr(FERROR_XFER, errno, "change_sacl_perms: %s()",
 				errfun);
 		}
-		return (mode_t)~0;
+		return (mode_t)-1;
 	}
 
 #ifdef SMB_ACL_LOSES_SPECIAL_MODE_BITS
@@ -967,7 +997,7 @@ static int set_rsync_acl(const char *fname, acl_duo *duo_item,
 		if (type == SMB_ACL_TYPE_ACCESS) {
 			cur_mode = change_sacl_perms(duo_item->sacl, &duo_item->racl,
 						     cur_mode, mode);
-			if (cur_mode == (mode_t)~0)
+			if (cur_mode == (mode_t)-1)
 				return 0;
 		}
 #endif
@@ -983,17 +1013,17 @@ static int set_rsync_acl(const char *fname, acl_duo *duo_item,
 	return 0;
 }
 
-/* Set ACL on indicated filename.
+/* Given a fname, this sets extended access ACL entries, the default ACL (for a
+ * dir), and the regular mode bits on the file.  Call this with fname set to
+ * NULL to just check if the ACL is different.
  *
- * This sets extended access ACL entries and default ACL.  If convenient,
- * it sets permission bits along with the access ACL and signals having
- * done so by modifying sxp->st.st_mode.
+ * If the ACL operation has a side-effect of changing the file's mode, the
+ * sxp->st.st_mode value will be changed to match.
  *
- * Returns 1 for unchanged, 0 for changed, -1 for failed.  Call this
- * with fname set to NULL to just check if the ACL is unchanged. */
-int set_acl(const char *fname, const struct file_struct *file, stat_x *sxp)
+ * Returns 0 for an unchanged ACL, 1 for changed, -1 for failed. */
+int set_acl(const char *fname, const struct file_struct *file, stat_x *sxp, mode_t new_mode)
 {
-	int unchanged = 1;
+	int changed = 0;
 	int32 ndx;
 	BOOL eq;
 
@@ -1007,18 +1037,18 @@ int set_acl(const char *fname, const struct file_struct *file, stat_x *sxp)
 		acl_duo *duo_item = access_acl_list.items;
 		duo_item += ndx;
 		eq = sxp->acc_acl
-		  && rsync_acl_equal_enough(sxp->acc_acl, &duo_item->racl, file->mode);
+		  && rsync_acl_equal_enough(sxp->acc_acl, &duo_item->racl, new_mode);
 		if (!eq) {
-			unchanged = 0;
+			changed = 1;
 			if (!dry_run && fname
 			 && set_rsync_acl(fname, duo_item, SMB_ACL_TYPE_ACCESS,
-					  sxp, file->mode) < 0)
-				unchanged = -1;
+					  sxp, new_mode) < 0)
+				return -1;
 		}
 	}
 
-	if (!S_ISDIR(sxp->st.st_mode))
-		return unchanged;
+	if (!S_ISDIR(new_mode))
+		return changed;
 
 	ndx = F_DIR_DEFACL(file);
 	if (ndx >= 0 && (size_t)ndx < default_acl_list.count) {
@@ -1026,16 +1056,15 @@ int set_acl(const char *fname, const struct file_struct *file, stat_x *sxp)
 		duo_item += ndx;
 		eq = sxp->def_acl && rsync_acl_equal(sxp->def_acl, &duo_item->racl);
 		if (!eq) {
-			if (unchanged > 0)
-				unchanged = 0;
+			changed = 1;
 			if (!dry_run && fname
 			 && set_rsync_acl(fname, duo_item, SMB_ACL_TYPE_DEFAULT,
-					  sxp, file->mode) < 0)
-				unchanged = -1;
+					  sxp, new_mode) < 0)
+				return -1;
 		}
 	}
 
-	return unchanged;
+	return changed;
 }
 
 /* Non-incremental recursion needs to convert all the received IDs.
@@ -1078,6 +1107,9 @@ int default_perms_for_dir(const char *dir)
 	if (sacl == NULL) {
 		/* Couldn't get an ACL.  Darn. */
 		switch (errno) {
+		case EINVAL:
+			/* If SMB_ACL_TYPE_DEFAULT isn't valid, then the ACLs must be non-POSIX. */
+			break;
 #ifdef ENOTSUP
 		case ENOTSUP:
 #endif

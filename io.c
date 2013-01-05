@@ -177,13 +177,19 @@ static void got_flist_entry_status(enum festatus status, const char *buf)
 	case FES_SUCCESS:
 		if (remove_source_files)
 			send_msg(MSG_SUCCESS, buf, 4, 0);
+		/* FALL THROUGH */
+	case FES_NO_SEND:
+#ifdef SUPPORT_HARD_LINKS
 		if (preserve_hard_links) {
 			struct file_struct *file = flist->files[ndx - flist->ndx_start];
 			if (F_IS_HLINKED(file)) {
+				if (status == FES_NO_SEND)
+					flist_ndx_push(&hlink_list, -2); /* indicates a failure follows */
 				flist_ndx_push(&hlink_list, ndx);
 				flist->in_progress++;
 			}
 		}
+#endif
 		break;
 	case FES_REDO:
 		if (read_batch) {
@@ -194,8 +200,6 @@ static void got_flist_entry_status(enum festatus status, const char *buf)
 		if (inc_recurse)
 			flist->to_redo++;
 		flist_ndx_push(&redo_list, ndx);
-		break;
-	case FES_NO_SEND:
 		break;
 	}
 }
@@ -1062,7 +1066,6 @@ static int readfd_unbuffered(int fd, char *buf, size_t len)
 				xbuf outbuf, inbuf;
 				char ibuf[512];
 				int add_null = 0;
-				int pos = 0;
 
 				INIT_CONST_XBUF(outbuf, line);
 				INIT_XBUF(inbuf, ibuf, 0, -1);
@@ -1077,7 +1080,6 @@ static int readfd_unbuffered(int fd, char *buf, size_t len)
 					if (iconvbufs(ic_send, &inbuf, &outbuf,
 					    ICB_INCLUDE_BAD | ICB_INCLUDE_INCOMPLETE) < 0)
 						goto overflow;
-					pos = -1;
 				}
 				if (add_null) {
 					if (outbuf.len == outbuf.size)
@@ -1402,7 +1404,7 @@ static void sleep_for_bwlimit(int bytes_written)
 	if (prior_tv.tv_sec) {
 		elapsed_usec = (start_tv.tv_sec - prior_tv.tv_sec) * ONE_SEC
 			     + (start_tv.tv_usec - prior_tv.tv_usec);
-		total_written -= elapsed_usec * bwlimit / (ONE_SEC/1024);
+		total_written -= (int64)elapsed_usec * bwlimit / (ONE_SEC/1024);
 		if (total_written < 0)
 			total_written = 0;
 	}

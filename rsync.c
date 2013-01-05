@@ -42,8 +42,6 @@ extern int am_generator;
 extern int am_starting_up;
 extern int allow_8bit_chars;
 extern int protocol_version;
-extern int uid_ndx;
-extern int gid_ndx;
 extern int inc_recurse;
 extern int inplace;
 extern int flist_eof;
@@ -425,7 +423,9 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
 		set_xattr(fname, file, fnamecmp, sxp);
 #endif
 
-	if (!preserve_times || (S_ISDIR(sxp->st.st_mode) && preserve_times == 1))
+	if (!preserve_times
+	 || (!(preserve_times & PRESERVE_DIR_TIMES) && S_ISDIR(sxp->st.st_mode))
+	 || (!(preserve_times & PRESERVE_LINK_TIMES) && S_ISLNK(sxp->st.st_mode)))
 		flags |= ATTRS_SKIP_MTIME;
 	if (!(flags & ATTRS_SKIP_MTIME)
 	    && cmp_time(sxp->st.st_mtime, file->modtime) != 0) {
@@ -444,7 +444,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
 	change_uid = am_root && uid_ndx && sxp->st.st_uid != (uid_t)F_OWNER(file);
 	change_gid = gid_ndx && !(file->flags & FLAG_SKIP_GROUP)
 		  && sxp->st.st_gid != (gid_t)F_GROUP(file);
-#if !defined HAVE_LCHOWN && !defined CHOWN_MODIFIES_SYMLINK
+#ifndef CAN_CHOWN_SYMLINK
 	if (S_ISLNK(sxp->st.st_mode)) {
 		;
 	} else
@@ -463,9 +463,9 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
 			}
 		}
 		if (am_root >= 0) {
-			if (do_lchown(fname,
-			    change_uid ? (uid_t)F_OWNER(file) : sxp->st.st_uid,
-			    change_gid ? (gid_t)F_GROUP(file) : sxp->st.st_gid) != 0) {
+			uid_t uid = change_uid ? (uid_t)F_OWNER(file) : sxp->st.st_uid;
+			gid_t gid = change_gid ? (gid_t)F_GROUP(file) : sxp->st.st_gid;
+			if (do_lchown(fname, uid, gid) != 0) {
 				/* We shouldn't have attempted to change uid
 				 * or gid unless have the privilege. */
 				rsyserr(FERROR_XFER, errno, "%s %s failed",
@@ -473,6 +473,10 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
 				    full_fname(fname));
 				goto cleanup;
 			}
+			if (uid == (uid_t)-1 && sxp->st.st_uid != (uid_t)-1)
+				rprintf(FERROR_XFER, "uid 4294967295 (-1) is impossible to set on %s\n", full_fname(fname));
+			if (gid == (gid_t)-1 && sxp->st.st_gid != (gid_t)-1)
+				rprintf(FERROR_XFER, "gid 4294967295 (-1) is impossible to set on %s\n", full_fname(fname));
 			/* A lchown had been done, so we need to re-stat if
 			 * the destination had the setuid or setgid bits set
 			 * (due to the side effect of the chown call). */
@@ -491,8 +495,10 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
 	 * If set_acl() changes permission bits in the process of setting
 	 * an access ACL, it changes sxp->st.st_mode so we know whether we
 	 * need to chmod(). */
-	if (preserve_acls && !S_ISLNK(new_mode) && set_acl(fname, file, sxp) == 0)
-		updated = 1;
+	if (preserve_acls && !S_ISLNK(new_mode)) {
+		if (set_acl(fname, file, sxp, new_mode) > 0)
+			updated = 1;
+	}
 #endif
 
 #ifdef HAVE_CHMOD

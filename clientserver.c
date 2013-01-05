@@ -259,7 +259,10 @@ int start_inband_exchange(int f_in, int f_out, const char *user, int argc, char 
 		if (strncmp(*argv, modname, modlen) == 0
 		 && argv[0][modlen] == '\0')
 			sargs[sargc++] = modname; /* we send "modname/" */
-		else
+		else if (**argv == '-') {
+			if (asprintf(sargs + sargc++, "./%s", *argv) < 0)
+				out_of_memory("start_inband_exchange");
+		} else
 			sargs[sargc++] = *argv;
 		argv++;
 		argc--;
@@ -1068,7 +1071,7 @@ int daemon_main(void)
 	rprintf(FLOG, "rsyncd version %s starting, listening on port %d\n",
 		RSYNC_VERSION, rsync_port);
 	/* TODO: If listening on a particular address, then show that
-	 * address too.  In fact, why not just do inet_ntop on the
+	 * address too.  In fact, why not just do getnameinfo on the
 	 * local address??? */
 
 	start_accept_loop(rsync_port, start_daemon);

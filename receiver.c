@@ -24,6 +24,7 @@
 extern int verbose;
 extern int dry_run;
 extern int do_xfers;
+extern int am_root;
 extern int am_server;
 extern int do_progress;
 extern int inc_recurse;
@@ -63,31 +64,29 @@ static flist_ndx_list batch_redo_list;
 /* We're either updating the basis file or an identical copy: */
 static int updating_basis_or_equiv;
 
-/*
- * get_tmpname() - create a tmp filename for a given filename
- *
- *   If a tmpdir is defined, use that as the directory to
- *   put it in.  Otherwise, the tmp filename is in the same
- *   directory as the given name.  Note that there may be no
- *   directory at all in the given name!
- *
- *   The tmp filename is basically the given filename with a
- *   dot prepended, and .XXXXXX appended (for mkstemp() to
- *   put its unique gunk in).  Take care to not exceed
- *   either the MAXPATHLEN or NAME_MAX, esp. the last, as
- *   the basename basically becomes 8 chars longer. In that
- *   case, the original name is shortened sufficiently to
- *   make it all fit.
- *
- *   Of course, there's no real reason for the tmp name to
- *   look like the original, except to satisfy us humans.
- *   As long as it's unique, rsync will work.
- */
+#define TMPNAME_SUFFIX ".XXXXXX"
+#define TMPNAME_SUFFIX_LEN ((int)sizeof TMPNAME_SUFFIX - 1)
 
+/* get_tmpname() - create a tmp filename for a given filename
+ *
+ * If a tmpdir is defined, use that as the directory to put it in.  Otherwise,
+ * the tmp filename is in the same directory as the given name.  Note that
+ * there may be no directory at all in the given name!
+ *
+ * The tmp filename is basically the given filename with a dot prepended, and
+ * .XXXXXX appended (for mkstemp() to put its unique gunk in).  We take care
+ * to not exceed either the MAXPATHLEN or NAME_MAX, especially the last, as
+ * the basename basically becomes 8 characters longer.  In such a case, the
+ * original name is shortened sufficiently to make it all fit.
+ *
+ * Of course, the only reason the file is based on the original name is to
+ * make it easier to figure out what purpose a temp file is serving when a
+ * transfer is in progress. */
 int get_tmpname(char *fnametmp, const char *fname)
 {
 	int maxname, added, length = 0;
 	const char *f;
+	char *suf;
 
 	if (tmpdir) {
 		/* Note: this can't overflow, so the return value is safe */
@@ -107,8 +106,9 @@ int get_tmpname(char *fnametmp, const char *fname)
 	fnametmp[length++] = '.';
 
 	/* The maxname value is bufsize, and includes space for the '\0'.
-	 * (Note that NAME_MAX get -8 for the leading '.' above.) */
-	maxname = MIN(MAXPATHLEN - 7 - length, NAME_MAX - 8);
+	 * NAME_MAX needs an extra -1 for the name's leading dot. */
+	maxname = MIN(MAXPATHLEN - length - TMPNAME_SUFFIX_LEN,
+		      NAME_MAX - 1 - TMPNAME_SUFFIX_LEN);
 
 	if (maxname < 1) {
 		rprintf(FERROR_XFER, "temporary filename too long: %s\n", fname);
@@ -119,7 +119,17 @@ int get_tmpname(char *fnametmp, const char *fname)
 	added = strlcpy(fnametmp + length, f, maxname);
 	if (added >= maxname)
 		added = maxname - 1;
-	memcpy(fnametmp + length + added, ".XXXXXX", 8);
+	suf = fnametmp + length + added;
+
+	/* Trim any dangling high-bit chars if the first-trimmed char (if any) is
+	 * also a high-bit char, just in case we cut into a multi-byte sequence.
+	 * We are guaranteed to stop because of the leading '.' we added. */
+	if ((int)f[added] & 0x80) {
+		while ((int)suf[-1] & 0x80)
+			suf--;
+	}
+
+	memcpy(suf, TMPNAME_SUFFIX, TMPNAME_SUFFIX_LEN+1);
 
 	return 1;
 }
@@ -131,15 +141,25 @@ int get_tmpname(char *fnametmp, const char *fname)
 int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
 {
 	int fd;
+	mode_t added_perms;
 
 	if (!get_tmpname(fnametmp, fname))
 		return -1;
+
+	if (am_root < 0) {
+		/* For --fake-super, the file must be useable by the copying
+		 * user, just like it would be for root. */
+		added_perms = S_IRUSR|S_IWUSR;
+	} else {
+		/* For a normal copy, we need to be able to tweak things like xattrs. */
+		added_perms = S_IWUSR;
+	}
 
 	/* We initially set the perms without the setuid/setgid bits or group
 	 * access to ensure that there is no race condition.  They will be
 	 * correctly updated after the right owner and group info is set.
 	 * (Thanks to snabb@epipe.fi for pointing this out.) */
-	fd = do_mkstemp(fnametmp, file->mode & INITACCESSPERMS);
+	fd = do_mkstemp(fnametmp, (file->mode|added_perms) & INITACCESSPERMS);
 
 #if 0
 	/* In most cases parent directories will already exist because their
@@ -149,7 +169,7 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
 	    && create_directory_path(fnametmp) == 0) {
 		/* Get back to name with XXXXXX in it. */
 		get_tmpname(fnametmp, fname);
-		fd = do_mkstemp(fnametmp, file->mode & INITACCESSPERMS);
+		fd = do_mkstemp(fnametmp, (file->mode|added_perms) & INITACCESSPERMS);
 	}
 #endif
 
@@ -249,8 +269,9 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
 
 		if (verbose > 3) {
 			rprintf(FINFO,
-				"chunk[%d] of size %ld at %.0f offset=%.0f\n",
-				i, (long)len, (double)offset2, (double)offset);
+				"chunk[%d] of size %ld at %.0f offset=%.0f%s\n",
+				i, (long)len, (double)offset2, (double)offset,
+				updating_basis_or_equiv && offset == offset2 ? " (seek)" : "");
 		}
 
 		if (mapbuf) {
@@ -285,8 +306,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
 		goto report_write_error;
 
 #ifdef HAVE_FTRUNCATE
-	if (inplace && fd != -1
-	 && ftruncate(fd, offset) < 0) {
+	if (inplace && fd != -1 && do_ftruncate(fd, offset) < 0) {
 		rsyserr(FERROR_XFER, errno, "ftruncate failed on %s",
 			full_fname(fname));
 	}
@@ -295,7 +315,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
 	if (do_progress)
 		end_progress(total_size);
 
-	if (fd != -1 && offset > 0 && sparse_end(fd) != 0) {
+	if (fd != -1 && offset > 0 && sparse_end(fd, offset) != 0) {
 	    report_write_error:
 		rsyserr(FERROR_XFER, errno, "write failed on %s",
 			full_fname(fname));
@@ -483,14 +503,15 @@ int recv_files(int f_in, char *local_name)
 			rprintf(FINFO, "recv_files(%s)\n", fname);
 
 #ifdef SUPPORT_XATTRS
-		if (iflags & ITEM_REPORT_XATTR && do_xfers)
+		if (preserve_xattrs && iflags & ITEM_REPORT_XATTR && do_xfers)
 			recv_xattr_request(file, f_in);
 #endif
 
 		if (!(iflags & ITEM_TRANSFER)) {
 			maybe_log_item(file, iflags, itemizing, xname);
 #ifdef SUPPORT_XATTRS
-			if (preserve_xattrs && iflags & ITEM_REPORT_XATTR && do_xfers)
+			if (preserve_xattrs && iflags & ITEM_REPORT_XATTR && do_xfers
+			 && !BITS_SET(iflags, ITEM_XNAME_FOLLOWS|ITEM_LOCAL_CHANGE))
 				set_file_attrs(fname, file, NULL, fname, 0);
 #endif
 			continue;

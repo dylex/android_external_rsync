@@ -64,6 +64,7 @@ extern int write_batch;
 extern int batch_fd;
 extern int filesfrom_fd;
 extern int connect_timeout;
+extern dev_t filesystem_dev;
 extern pid_t cleanup_child_pid;
 extern unsigned int module_dirlen;
 extern struct stats stats;
@@ -428,7 +429,11 @@ static pid_t do_cmd(char *cmd, char *machine, char *user, char **remote_argv, in
 				rprintf(FERROR, "internal: args[] overflowed in do_cmd()\n");
 				exit_cleanup(RERR_SYNTAX);
 			}
-			args[argc++] = *remote_argv++;
+			if (**remote_argv == '-') {
+				if (asprintf(args + argc++, "./%s", *remote_argv++) < 0)
+					out_of_memory("do_cmd");
+			} else
+				args[argc++] = *remote_argv++;
 			remote_argc--;
 		}
 	}
@@ -521,7 +526,7 @@ static char *get_local_name(struct file_list *flist, char *dest_path)
 		if ((*dest_path != '.' || dest_path[1] != '\0')
 		 && (check_filter(&daemon_filter_list, FLOG, dest_path, 0) < 0
 		  || check_filter(&daemon_filter_list, FLOG, dest_path, 1) < 0)) {
-			rprintf(FERROR, "skipping daemon-excluded destination \"%s\"\n",
+			rprintf(FERROR, "ERROR: daemon has excluded destination \"%s\"\n",
 				dest_path);
 			exit_cleanup(RERR_FILESELECT);
 		}
@@ -538,6 +543,7 @@ static char *get_local_name(struct file_list *flist, char *dest_path)
 					full_fname(dest_path));
 				exit_cleanup(RERR_FILESELECT);
 			}
+			filesystem_dev = st.st_dev; /* ensures --force works right w/-x */
 			return NULL;
 		}
 		if (file_total > 1) {

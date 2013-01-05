@@ -117,7 +117,7 @@ cD$all_plus char3
 cS$all_plus fifo
 EOT
 if test ! -r "$fromdir/block2.5"; then
-    sed -e '/block2\.5/d' <"$chkfile" >"$chkfile.new"
+    grep -v block2.5 <"$chkfile" >"$chkfile.new"
     mv "$chkfile.new" "$chkfile"
 fi
 diff $diffopt "$chkfile" "$outfile" || test_fail "test 4 failed"
@@ -128,7 +128,7 @@ echo ""
 ( cd "$todir" && rsync_ls_lR . ) > "$tmpdir/ls-to"
 diff $diffopt "$tmpdir/ls-from" "$tmpdir/ls-to"
 
-if test -b "$fromdir/block2.5"; then
+if test -r "$fromdir/block2.5"; then
     set -x
     $RSYNC -aii --link-dest="$todir" "$fromdir/" "$chkdir/" \
 	| tee "$outfile"
@@ -143,7 +143,7 @@ hD$allspace char2
 hD$allspace char3
 hS$allspace fifo
 EOT
-    diff $diffopt "$chkfile" "$outfile" || test_fail "test 4 failed"
+    diff $diffopt "$chkfile" "$outfile" || test_fail "test 5 failed"
 fi
 
 # The script would have aborted on error, so getting here means we've won.

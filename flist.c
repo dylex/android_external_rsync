@@ -52,12 +52,9 @@ extern int preserve_hard_links;
 extern int preserve_devices;
 extern int preserve_specials;
 extern int delete_during;
-extern int uid_ndx;
-extern int gid_ndx;
 extern int eol_nulls;
 extern int relative_paths;
 extern int implied_dirs;
-extern int file_extra_cnt;
 extern int ignore_perishable;
 extern int non_perishable_cnt;
 extern int prune_empty_dirs;
@@ -70,6 +67,7 @@ extern int use_safe_inc_flist;
 extern int need_unsorted_flist;
 extern int sender_symlink_iconv;
 extern int unsort_ndx;
+extern uid_t our_uid;
 extern struct stats stats;
 extern char *filesfrom_host;
 
@@ -632,8 +630,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
 		stats.total_size += F_LENGTH(file);
 }
 
-static struct file_struct *recv_file_entry(struct file_list *flist,
-					   int xflags, int f)
+static struct file_struct *recv_file_entry(int f, struct file_list *flist, int xflags)
 {
 	static int64 modtime;
 	static mode_t mode;
@@ -1053,11 +1050,11 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
 
 #ifdef SUPPORT_ACLS
 	if (preserve_acls && !S_ISLNK(mode))
-		receive_acl(file, f);
+		receive_acl(f, file);
 #endif
 #ifdef SUPPORT_XATTRS
 	if (preserve_xattrs)
-		receive_xattr(file, f );
+		receive_xattr(f, file);
 #endif
 
 	if (S_ISREG(mode) || S_ISLNK(mode))
@@ -1286,10 +1283,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
 	}
 #endif
 	file->mode = st.st_mode;
-	if (uid_ndx) /* Check uid_ndx instead of preserve_uid for del support */
+	if (preserve_uid)
 		F_OWNER(file) = st.st_uid;
-	if (gid_ndx) /* Check gid_ndx instead of preserve_gid for del support */
+	if (preserve_gid)
 		F_GROUP(file) = st.st_gid;
+	if (am_generator && st.st_uid == our_uid)
+		file->flags |= FLAG_OWNED_BY_US;
 
 	if (basename != thisname)
 		file->dirname = lastdir;
@@ -1429,6 +1428,7 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
 #endif
 #ifdef SUPPORT_XATTRS
 		if (preserve_xattrs) {
+			sx.st.st_mode = file->mode;
 			sx.xattr = NULL;
 			if (get_xattr(fname, &sx) < 0) {
 				io_error |= IOERR_GENERAL;
@@ -1445,13 +1445,13 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
 
 #ifdef SUPPORT_ACLS
 		if (preserve_acls && !S_ISLNK(file->mode)) {
-			send_acl(&sx, f);
+			send_acl(f, &sx);
 			free_acl(&sx);
 		}
 #endif
 #ifdef SUPPORT_XATTRS
 		if (preserve_xattrs) {
-			F_XATTR(file) = send_xattr(&sx, f);
+			F_XATTR(file) = send_xattr(f, &sx);
 			free_xattr(&sx);
 		}
 #endif
@@ -1646,11 +1646,12 @@ static void send_directory(int f, struct file_list *flist, char *fbuf, int len,
 		remainder = 0;
 
 	for (errno = 0, di = readdir(d); di; errno = 0, di = readdir(d)) {
+		unsigned name_len;
 		char *dname = d_name(di);
 		if (dname[0] == '.' && (dname[1] == '\0'
 		    || (dname[1] == '.' && dname[2] == '\0')))
 			continue;
-		unsigned name_len = strlcpy(p, dname, remainder);
+		name_len = strlcpy(p, dname, remainder);
 		if (name_len >= remainder) {
 			char save = fbuf[len];
 			fbuf[len] = '\0';
@@ -2101,12 +2102,8 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
 				fn = fbuf;
 			/* A leading ./ can be used in relative mode to affect
 			 * the dest dir without its name being in the path. */
-			if (*fn == '.' && fn[1] == '/' && !implied_dot_dir) {
-				send_file_name(f, flist, ".", NULL,
-				    (flags | FLAG_IMPLIED_DIR) & ~FLAG_CONTENT_DIR,
-				    ALL_FILTERS);
-				implied_dot_dir = 1;
-			}
+			if (*fn == '.' && fn[1] == '/' && fn[2] && !implied_dot_dir)
+				implied_dot_dir = -1;
 			len = clean_fname(fn, CFN_KEEP_TRAILING_SLASH
 					    | CFN_DROP_TRAILING_DOT_DIR);
 			if (len == 1) {
@@ -2144,11 +2141,20 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
 		dirlen = dir ? strlen(dir) : 0;
 		if (dirlen != lastdir_len || memcmp(lastdir, dir, dirlen) != 0) {
 			if (!change_pathname(NULL, dir, -dirlen))
-				continue;
+				goto bad_path;
 			lastdir = pathname;
 			lastdir_len = pathname_len;
-		} else if (!change_pathname(NULL, lastdir, lastdir_len))
+		} else if (!change_pathname(NULL, lastdir, lastdir_len)) {
+		    bad_path:
+			if (implied_dot_dir < 0)
+				implied_dot_dir = 0;
 			continue;
+		}
+
+		if (implied_dot_dir < 0) {
+			implied_dot_dir = 1;
+			send_file_name(f, flist, ".", NULL, (flags | FLAG_IMPLIED_DIR) & ~FLAG_CONTENT_DIR, ALL_FILTERS);
+		}
 
 		if (fn != fbuf)
 			memmove(fbuf, fn, len + 1);
@@ -2359,7 +2365,7 @@ struct file_list *recv_file_list(int f)
 		}
 
 		flist_expand(flist, 1);
-		file = recv_file_entry(flist, flags, f);
+		file = recv_file_entry(f, flist, flags);
 
 		if (inc_recurse && S_ISDIR(file->mode)) {
 			flist_expand(dir_flist, 1);
@@ -3043,13 +3049,14 @@ char *f_name(const struct file_struct *f, char *fbuf)
  * of the dirname string, and also indicates that "dirname" is a MAXPATHLEN
  * buffer (the functions we call will append names onto the end, but the old
  * dir value will be restored on exit). */
-struct file_list *get_dirlist(char *dirname, int dlen, int ignore_filter_rules)
+struct file_list *get_dirlist(char *dirname, int dlen, int flags)
 {
 	struct file_list *dirlist;
 	char dirbuf[MAXPATHLEN];
 	int save_recurse = recurse;
 	int save_xfer_dirs = xfer_dirs;
 	int save_prune_empty_dirs = prune_empty_dirs;
+	int senddir_fd = flags & GDL_IGNORE_FILTER_RULES ? -2 : -1;
 
 	if (dlen < 0) {
 		dlen = strlcpy(dirbuf, dirname, MAXPATHLEN);
@@ -3062,7 +3069,7 @@ struct file_list *get_dirlist(char *dirname, int dlen, int ignore_filter_rules)
 
 	recurse = 0;
 	xfer_dirs = 1;
-	send_directory(ignore_filter_rules ? -2 : -1, dirlist, dirname, dlen, FLAG_CONTENT_DIR);
+	send_directory(senddir_fd, dirlist, dirname, dlen, FLAG_CONTENT_DIR);
 	xfer_dirs = save_xfer_dirs;
 	recurse = save_recurse;
 	if (do_progress)
